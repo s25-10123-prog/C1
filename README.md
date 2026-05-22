@@ -24,7 +24,7 @@
     }
   </script>
 
-  <!-- React 및 Babel CDN (브라우저에서 JSX 직접 실행) -->
+  <!-- React 18 및 Babel CDN (브라우저에서 JSX 직접 실행) -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -32,8 +32,13 @@
   <!-- Lucide Icons (아이콘 라이브러리) -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
+  <!-- Firebase 호환성(compat) CDN 스크립트 - 비동기 충돌을 원천 차단하는 가장 안정적인 프로덕션용 로드 방식 -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
   <style>
-    /* 애니메이션 및 모바일 스크롤 부드럽게 */
+    /* 애니메이션 및 모바일 레이아웃 부드러운 스크롤 */
     .animate-hover-spin:hover {
       transform: rotate(45deg);
       transition: transform 0.2s ease-in-out;
@@ -46,42 +51,6 @@
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-300">
 
   <div id="root"></div>
-
-  <!-- Firebase App 및 Auth, Firestore SDK 불러오기 -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { 
-      getAuth, 
-      createUserWithEmailAndPassword, 
-      signInWithEmailAndPassword, 
-      sendPasswordResetEmail, 
-      onAuthStateChanged, 
-      signOut,
-      signInAnonymously
-    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-    import { 
-      getFirestore, 
-      doc, 
-      setDoc, 
-      onSnapshot 
-    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-
-    // 글로벌 스코프에 등록하여 React 내부에서 사용할 수 있도록 함
-    window.FirebaseLib = {
-      initializeApp,
-      getAuth,
-      createUserWithEmailAndPassword,
-      signInWithEmailAndPassword,
-      sendPasswordResetEmail,
-      onAuthStateChanged,
-      signOut,
-      signInAnonymously,
-      getFirestore,
-      doc,
-      setDoc,
-      onSnapshot
-    };
-  </script>
 
   <!-- React 컴포넌트 소스 코드 실행 -->
   <script type="text/babel">
@@ -108,7 +77,13 @@
       measurementId: "G-LJ6GL7YWVX"
     };
 
-    // 고정 구조 정의
+    // Firebase 초기화 진행 (compat 버전을 사용하여 동기적으로 즉시 활성화)
+    const firebaseApp = firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'student-record-app';
+
+    // 2022 개정 교육과정 기준 고정 기입 항목
     const FIXED_STRUCTURE = {
       autonomous: { 
         label: "자율활동", 
@@ -142,6 +117,7 @@
       }
     };
 
+    // 학년별 고정 자동 탑재 교과목 데이터베이스 (기록장 기준: 공통 단일과목)
     const DEFAULT_GRADE_SUBJECTS = {
       '1': [
         { name: "공통국어", limit: 500, content: "" },
@@ -178,6 +154,7 @@
       ]
     };
 
+    // 학년별 추가 가능한 선택과목 풀
     const SELECTABLE_OPTIONAL_SUBJECTS = {
       '1': [],
       '2': [
@@ -255,59 +232,31 @@
       });
 
       const canvasRef = useRef(null);
-      const [firebaseSDK, setFirebaseSDK] = useState(null);
 
-      // 다크 모드 스타일 클래스 전파
+      // Auth 상태 변화 감시자 세팅
       useEffect(() => {
-        if (isDarkMode) {
-          document.documentElement.classList.add('dark');
-          localStorage.setItem('theme', 'dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-          localStorage.setItem('theme', 'light');
-        }
-      }, [isDarkMode]);
-
-      // Firebase SDK 로드 감지 및 인증 감시자 세팅
-      useEffect(() => {
-        const checkSDK = setInterval(() => {
-          if (window.FirebaseLib) {
-            clearInterval(checkSDK);
-            const { initializeApp, getAuth, getFirestore, onAuthStateChanged } = window.FirebaseLib;
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            
-            setFirebaseSDK({ auth, db });
-
-            const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-              setUser(currentUser);
-              setLoading(false);
-              if (currentUser) {
-                setView('main');
-                setMessage({ type: '', text: '' });
-              } else {
-                setView('login');
-              }
-            });
-            return () => unsubscribe();
+        const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+          setUser(currentUser);
+          setLoading(false);
+          if (currentUser) {
+            setView('main');
+            setMessage({ type: '', text: '' });
+          } else {
+            setView('login');
           }
-        }, 100);
-        return () => clearInterval(checkSDK);
+        });
+        return () => unsubscribe();
       }, []);
 
-      // Firestore 실시간 데이터 구독
+      // Firestore 실시간 데이터 로드
       useEffect(() => {
-        if (!user || !firebaseSDK) return;
-        const { db } = firebaseSDK;
-        const { doc, onSnapshot } = window.FirebaseLib;
-        const appId = 'student-record-app';
+        if (!user) return;
 
         const unsubscribes = ['1', '2', '3'].map((g) => {
-          const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'records', `grade_${g}`);
+          const docRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('records').doc(`grade_${g}`);
           
-          return onSnapshot(docRef, (docSnap) => {
-            if (docSnap.exists()) {
+          return docRef.onSnapshot((docSnap) => {
+            if (docSnap.exists) {
               const data = docSnap.data();
               setAllGradesData(prev => ({
                 ...prev,
@@ -352,7 +301,7 @@
         });
 
         return () => unsubscribes.forEach(unsub => unsub());
-      }, [user, firebaseSDK]);
+      }, [user]);
 
       useEffect(() => {
         if (allGradesData[grade]) {
@@ -392,10 +341,7 @@
 
       const handleAuthAction = async (e, actionType) => {
         e.preventDefault();
-        if (!firebaseSDK) return;
         setMessage({ type: '', text: '' });
-        const { auth } = firebaseSDK;
-        const { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } = window.FirebaseLib;
 
         const finalEmail = processEmailInput(email);
 
@@ -410,20 +356,20 @@
               setMessage({ type: 'error', text: '비밀번호는 최소 6자 이상이어야 합니다.' });
               return;
             }
-            await createUserWithEmailAndPassword(auth, finalEmail, password);
+            await auth.createUserWithEmailAndPassword(finalEmail, password);
             setMessage({ type: 'success', text: '성공적으로 가입되었습니다! 로그인 중입니다...' });
           } else if (actionType === 'login') {
-            await signInWithEmailAndPassword(auth, finalEmail, password);
+            await auth.signInWithEmailAndPassword(finalEmail, password);
           } else if (actionType === 'reset') {
-            await sendPasswordResetEmail(auth, finalEmail);
+            await auth.sendPasswordResetEmail(finalEmail);
             setMessage({ type: 'success', text: '비밀번호 재설정 메일이 발송되었습니다.' });
           }
         } catch (err) {
-          if (actionType === 'login' && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') && (email.trim() === 'admin' || email.trim() === 'admin@admin.com')) {
+          if (actionType === 'login' && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') && (email.trim() === 'admin' || email.trim() === 'admin@admin.com')) {
             try {
               setMessage({ type: 'success', text: '관리자 데모 계정을 신규 생성하고 있습니다...' });
-              await createUserWithEmailAndPassword(auth, 'admin@admin.com', 'admin09');
-              await signInWithEmailAndPassword(auth, 'admin@admin.com', 'admin09');
+              await auth.createUserWithEmailAndPassword('admin@admin.com', 'admin09');
+              await auth.signInWithEmailAndPassword('admin@admin.com', 'admin09');
               return;
             } catch (signUpErr) {
               console.error("데모계정 생성 실패", signUpErr);
@@ -434,20 +380,17 @@
       };
 
       const handleDemoLogin = async () => {
-        if (!firebaseSDK) return;
         setMessage({ type: '', text: '' });
         setEmail('admin');
         setPassword('admin09');
-        const { auth } = firebaseSDK;
-        const { signInWithEmailAndPassword, createUserWithEmailAndPassword } = window.FirebaseLib;
         
         try {
-          await signInWithEmailAndPassword(auth, 'admin@admin.com', 'admin09');
+          await auth.signInWithEmailAndPassword('admin@admin.com', 'admin09');
         } catch (err) {
-          if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+          if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
             try {
-              await createUserWithEmailAndPassword(auth, 'admin@admin.com', 'admin09');
-              await signInWithEmailAndPassword(auth, 'admin@admin.com', 'admin09');
+              await auth.createUserWithEmailAndPassword('admin@admin.com', 'admin09');
+              await auth.signInWithEmailAndPassword('admin@admin.com', 'admin09');
             } catch (createErr) {
               setMessage({ type: 'error', text: '데모 계정 생성 중 오류 발생: ' + createErr.message });
             }
@@ -458,10 +401,7 @@
       };
 
       const handleLogout = async () => {
-        if (!firebaseSDK) return;
         try {
-          const { auth } = firebaseSDK;
-          const { signOut } = window.FirebaseLib;
           setUser(null);
           setAllGradesData({
             '1': { fixed: {}, subjects: [], grades: {}, targetDept: '컴퓨터공학과' },
@@ -472,7 +412,7 @@
           setPassword('');
           setView('login');
           setMessage({ type: 'success', text: '안전하게 로그아웃 되었습니다.' });
-          await signOut(auth);
+          await auth.signOut();
         } catch (err) {
           console.error("로그아웃 실패:", err);
           setUser(null);
@@ -615,16 +555,13 @@
       };
 
       const saveToCloud = async () => {
-        if (!user || !firebaseSDK) return;
+        if (!user) return;
         setSaveStatus('saving');
-        const { db } = firebaseSDK;
-        const { doc, setDoc } = window.FirebaseLib;
-        const appId = 'student-record-app';
 
         try {
-          const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'records', `grade_${grade}`);
+          const docRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('records').doc(`grade_${grade}`);
           const dataToSave = allGradesData[grade];
-          await setDoc(docRef, {
+          await docRef.set({
             fixed: dataToSave.fixed || {},
             subjects: dataToSave.subjects || [],
             grades: dataToSave.grades || {},
@@ -753,6 +690,7 @@
         }
       };
 
+      // Canvas 그래프 렌더링
       useEffect(() => {
         if (activeTab !== 'grades' || !canvasRef.current) return;
 
@@ -896,6 +834,44 @@
       ];
       const trendAnalysis = analyzeTrend(gradePoints9);
 
+      const callGeminiFeedbackAPI = async (userQuery, systemPrompt) => {
+        const apiKey = ""; 
+        let attempts = 0;
+        const maxRetries = 5;
+
+        while (attempts < maxRetries) {
+          try {
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: userQuery }] }],
+                  systemInstruction: { parts: [{ text: systemPrompt }] }
+                })
+              }
+            );
+
+            if (!response.ok) {
+              throw new Error(`HTTP Error Status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) return text;
+            throw new Error("Invalid Response");
+          } catch (err) {
+            attempts++;
+            if (attempts >= maxRetries) {
+              throw err;
+            }
+            const delay = Math.pow(2, attempts - 1) * 1000;
+            await new Promise(res => setTimeout(res, delay));
+          }
+        }
+      };
+
       const handleGenerateAIFeedback = async () => {
         setIsGeneratingFeedback(true);
         setAiFeedbackText('');
@@ -955,6 +931,19 @@
       const grades = currentGradeData.grades || {};
       const gradesTabSubjects = getGradesTabSubjects();
 
+      // 한국어 에러 메시지 맵핑
+      const getErrorMessage = (code) => {
+        switch (code) {
+          case 'auth/email-already-in-use': return '이미 가입된 이메일 주소입니다.';
+          case 'auth/invalid-email': return '이메일 형식에 맞지 않습니다.';
+          case 'auth/weak-password': return '비밀번호는 최소 6자 이상으로 설정해 주세요.';
+          case 'auth/invalid-credential': return '이메일 주소 또는 비밀번호가 올바르지 않습니다.';
+          case 'auth/user-not-found': return '등록되지 않은 회원정보입니다.';
+          case 'auth/wrong-password': return '비밀번호가 일치하지 않습니다.';
+          default: return '연결 오류가 발생했습니다.';
+        }
+      };
+
       if (loading) {
         return (
           <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300">
@@ -1013,7 +1002,7 @@
 
                 {view !== 'forgotPassword' && (
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-450 uppercase tracking-wider mb-2 ml-1">비밀번호</label>
+                    <label className="block text-xs font-extrabold text-slate-455 uppercase tracking-wider mb-2 ml-1">비밀번호</label>
                     <div className="relative">
                       <Icon name="lock" className="absolute left-4 top-3.5 w-5 h-5 text-slate-300 dark:text-slate-600" />
                       <input 
@@ -1083,7 +1072,7 @@
                     className={`px-4 py-1.5 rounded-lg text-xs font-black transition-all ${
                       grade === g 
                         ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' 
-                        : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                        : 'text-slate-400 hover:text-slate-655 dark:hover:text-slate-300'
                     }`}
                   >
                     고{g}
@@ -1234,7 +1223,7 @@
                                   disabled={isAlreadyAdded}
                                   className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${
                                     isAlreadyAdded 
-                                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-350 dark:text-slate-600 border-transparent cursor-not-allowed'
+                                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-350 dark:text-slate-650 border-transparent cursor-not-allowed'
                                       : 'bg-white dark:bg-slate-850 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-300'
                                   }`}
                                 >
@@ -1307,7 +1296,7 @@
                               {grade !== '1' && (
                                 <button 
                                   onClick={() => handleDeleteSubject(sub.id, sub.name)} 
-                                  className="text-slate-300 dark:text-slate-600 hover:text-red-500 transition-colors p-1"
+                                  className="text-slate-300 dark:text-slate-655 hover:text-red-500 transition-colors p-1"
                                   title="과목 삭제"
                                 >
                                   <Icon name="trash-2" className="w-4 h-4" />
@@ -1453,7 +1442,7 @@
                         )}
                         <span className="text-xs font-black text-slate-800 dark:text-slate-100">입시 등급 트렌드 리포트</span>
                       </div>
-                      <p className="text-[11px] leading-relaxed text-slate-650 dark:text-slate-400 font-bold whitespace-pre-line">
+                      <p className="text-[11px] leading-relaxed text-slate-655 dark:text-slate-400 font-bold whitespace-pre-line">
                         {trendAnalysis.text}
                       </p>
                     </div>
@@ -1586,7 +1575,7 @@
                       {deptSearch && (
                         <button 
                           onClick={() => { setDeptSearch(''); setIsDeptDropdownOpen(false); }}
-                          className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+                          className="absolute right-3 top-3 text-slate-400 hover:text-slate-650"
                         >
                           <Icon name="x" className="w-4.5 h-4.5" />
                         </button>
@@ -1720,7 +1709,7 @@
                   <div className="space-y-2.5">
                     <div>
                       <h4 className="text-sm font-bold">글자 수 측정 기준 변경</h4>
-                      <p className="text-[11px] mt-0.5 text-slate-400">바이트 계산 모드를 켜거나 끌 수 있습니다.</p>
+                      <p className="text-[11px] mt-0.5 text-slate-450">바이트 계산 모드를 켜거나 끌 수 있습니다.</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
                       <button 
@@ -1734,7 +1723,7 @@
                       <button 
                         onClick={() => setByteCalcMode('byte')}
                         className={`py-2 text-xs font-bold rounded-lg transition-all ${
-                          byteCalcMode === 'byte' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' : 'text-slate-400'
+                          byteCalcMode === 'byte' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-white shadow-sm' : 'text-slate-450'
                         }`}
                       >
                         나이스 바이트(Byte)
@@ -1777,7 +1766,7 @@
       );
     }
 
-    // React 앱을 root 엘리먼트에 렌더링
+    // React 18 렌더링 초기화
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
